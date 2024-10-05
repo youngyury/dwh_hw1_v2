@@ -1,11 +1,10 @@
-version: '3'
-
 services:
   postgres_master:
     container_name: postgres_master
     image: postgres:14.5
     restart: always
     volumes:
+      - ./data_example:/var/lib/postgresql/example_data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data:/var/lib/postgresql/data
       - ./data-slave:/var/lib/postgresql/data-slave

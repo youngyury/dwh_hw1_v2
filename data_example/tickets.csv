@@ -1,0 +1,3 @@
+ticket_no,book_ref,passenger_id,passenger_name,contact_data
+TCKT001,A00001,P001,John Doe,"{""phone"": ""123456789"", ""email"": ""john@example.com""}"
+TCKT002,A00002,P002,Jane Smith,"{""phone"": ""987654321"", ""email"": ""jane@example.com""}"

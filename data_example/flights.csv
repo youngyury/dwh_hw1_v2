@@ -1,0 +1,3 @@
+flight_id,flight_no,scheduled_departure,scheduled_arrival,departure_airport,arrival_airport,status,aircraft_code,actual_departure,actual_arrival
+101,FL123,2024-05-15 08:28:27,2024-07-03 16:44:43,JFK,LAX,Scheduled,A32,,
+102,FL124,2024-11-02 00:02:59,2024-03-22 17:46:35,LAX,JFK,Scheduled,B73,,

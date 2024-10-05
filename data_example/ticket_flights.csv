@@ -1,0 +1,3 @@
+ticket_no,flight_id,fare_conditions,amount
+TCKT001,101,Economy,453.83
+TCKT002,102,Business,156.21

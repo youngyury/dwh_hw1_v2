@@ -1,0 +1,3 @@
+aircraft_code,model,range
+A32,"{""manufacturer"": ""Airbus"", ""type"": ""A32""}",6000
+B73,"{""manufacturer"": ""Boeing"", ""type"": ""737""}",5600
