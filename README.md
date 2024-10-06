@@ -1,2 +1,4 @@
 # dwh_hw1_v2
-legendary comeback
+Запускаем скрипт командой в консоли `sh docker-init.sh`, должны подтянуться образы постгри и реплики
+Теперь если хочется потыкаться в бд, можно это сделать через терминал также, используя команду `docker exec -it <container_name> psql -U <username> -d <database_name>`
+Либо подключиться через ide
