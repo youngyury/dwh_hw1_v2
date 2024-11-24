@@ -1,24 +1,25 @@
-import sys
-import json
-import typing
 import logging
+import json
 import requests
-import psycopg2
+import sys
+import typing
 
 from kafka import KafkaConsumer
-
+import psycopg2
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger('dmp_service')
 
-TOPICS = [
-    'connect_configs',
-    'connect_offsets',
-    'connect_statuses',
-    '_schemas',
-    '__debezium-heartbeat.pg-dev',
-    '__debezium-heartbeat.postgres',
-]
+DEF_TOPICS = ['connect_configs', 'connect_offsets', 'connect_statuses', '_schemas', '__debezium-heartbeat.pg-dev']
+
+# PostgreSQL connection settings
+DWH_SETTINGS = {
+    "dbname": "postgres",
+    "user": "postgres",
+    "password": "postgres",
+    "host": "postgres_dwh",
+    "port": "5432",
+}
 
 
 def fetch_cluster_id() -> str:
@@ -26,80 +27,118 @@ def fetch_cluster_id() -> str:
     return response['data'][0]['cluster_id']
 
 
-def fetch_topics(cluster_id: str) -> list[str]:
+def fetch_topics(cluster_id: str) -> typing.List[str]:
     meta_url = f'http://rest-proxy:8082/v3/clusters/{cluster_id}/topics'
     response = requests.get(meta_url).json()
-    return [topic['topic_name'] for topic in response['data'] if topic['topic_name'] not in TOPICS]
+    topics = [
+        topic['topic_name']
+        for topic in response['data']
+        if topic['topic_name'] not in DEF_TOPICS
+    ]
+    return topics
 
 
 def connect():
-    return psycopg2.connect(
-        dbname="postgres",
-        user="postgres",
-        password="postgres",
-        host="postgres_dwh",
-        port="5432"
-    )
+    """Establish a connection to the DWH."""
+    return psycopg2.connect(**DWH_SETTINGS)
 
 
 def create_consumer() -> KafkaConsumer:
-    return KafkaConsumer(
+    consumer = KafkaConsumer(
         bootstrap_servers='broker:29092',
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         auto_offset_reset="earliest",
-        group_id='backend'
+        group_id='backend',
     )
+    return consumer
+
+
+def handle_hub_event(table_name: str, data: dict, cursor):
+    """Insert data into a hub table."""
+    hub_table = f"dwh_detailed.{table_name}_hub"
+    record_source = "source_system"
+
+    query = f"""
+    INSERT INTO {hub_table} (hub_{table_name}_id, load_ts, record_source)
+    VALUES (%s, NOW(), %s)
+    ON CONFLICT DO NOTHING
+    """
+    cursor.execute(query, (data[f"{table_name}_id"], record_source))
+
+
+def handle_sat_event(table_name: str, data: dict, cursor):
+    """Insert data into a satellite table."""
+    sat_table = f"dwh_detailed.{table_name}_sat"
+    record_source = "source_system"
+    columns = ", ".join(data.keys())
+    values = ", ".join(["%s"] * len(data))
+    query = f"""
+    INSERT INTO {sat_table} ({columns}, load_ts, record_source)
+    VALUES ({values}, NOW(), %s)
+    """
+    cursor.execute(query, (*data.values(), record_source))
+
+
+def handle_link_event(table_name: str, data: dict, cursor):
+    """Insert data into a link table."""
+    link_table = f"dwh_detailed.{table_name}_link"
+    record_source = "source_system"
+    columns = ", ".join(data.keys())
+    values = ", ".join(["%s"] * len(data))
+    query = f"""
+    INSERT INTO {link_table} ({columns}, load_ts, record_source)
+    VALUES ({values}, NOW(), %s)
+    """
+    cursor.execute(query, (*data.values(), record_source))
 
 
 def handle_event(table_name: str, data: dict):
-    # переписать вставку для каждой таблицы из нашей базы
-    ####
-    if table_name != 'categories':
-        return
-
+    """Process events for a specific table."""
     dwh_conn = connect()
     cursor = dwh_conn.cursor()
 
-    query_hub = f"INSERT INTO " \
-                f"dwh_detailed.hub_categories (hub_category_id, load_ts, record_source) " \
-                f"VALUES ({data['category_id']}, NOW(), 'source_system')" \
-                f"ON CONFLICT DO NOTHING"
-    query_sat = f"INSERT INTO " \
-                f"dwh_detailed.sat_categories (sat_category_id, category_name, load_ts, record_source)" \
-                f"VALUES ({data['category_id']}, '{data['category_name']}', NOW(), 'source_system')"
+    try:
+        if table_name.endswith("_hub"):
+            handle_hub_event(table_name.replace("_hub", ""), data, cursor)
+        elif table_name.endswith("_sat"):
+            handle_sat_event(table_name.replace("_sat", ""), data, cursor)
+        elif table_name.endswith("_link"):
+            handle_link_event(table_name.replace("_link", ""), data, cursor)
+        else:
+            logger.warning("Unrecognized table type: %s", table_name)
 
-    cursor.execute(query_hub)
-    cursor.execute(query_sat)
-    ####
-
-    dwh_conn.commit()
-    dwh_conn.close()
+        dwh_conn.commit()
+    except Exception as e:
+        logger.error("Error processing event for table %s: %s", table_name, str(e))
+        dwh_conn.rollback()
+    finally:
+        dwh_conn.close()
 
 
 def process_events(consumer: KafkaConsumer):
+    """Process incoming Kafka events."""
     try:
         for message in consumer:
             value = message.value
-            print(value)
-            value = value['payload']
-            handle_event(table_name=value['source']['table'], data=value['after'])
+            payload = value['payload']
+            table_name = payload['source']['table']
+            data = payload['after']
+            logger.info("Processing table: %s, data: %s", table_name, data)
+            handle_event(table_name, data)
     except Exception as e:
-            print("Closing consumer, error\n")
-            consumer.close()
-            raise e
+        logger.error("Error processing events: %s", str(e))
+        consumer.close()
+        raise
     finally:
-        print("Consumer finish, finally\n")
         consumer.close()
 
 
 def main():
-    logger.info('start dmp service')
+    logger.info('Start DMP Service')
     cluster_id = fetch_cluster_id()
-    logger.info('successfully fetched cluster_id: %s', cluster_id)
+    logger.info('Successfully fetched cluster_id: %s', cluster_id)
     topics = fetch_topics(cluster_id)
-    logger.info('successfully fetched topics: %s', topics)
-
-    print(topics)
+    logger.info('Successfully fetched topics: %s', topics)
 
     consumer = create_consumer()
     consumer.subscribe(topics)
